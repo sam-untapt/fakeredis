@@ -4,6 +4,15 @@ fakeredis: A fake version of a redis-py
 .. image:: https://secure.travis-ci.org/jamesls/fakeredis.png?branch=master
    :target: http://travis-ci.org/jamesls/fakeredis
 
+.. image:: https://pypip.in/version/fakeredis/badge.svg
+   :target: https://pypi.python.org/pypi/fakeredis
+
+.. image:: https://pypip.in/py_versions/fakeredis/badge.svg
+    :target: https://pypi.python.org/pypi/fakeredis/
+
+.. image:: https://pypip.in/license/fakeredis/badge.svg
+    :target: https://pypi.python.org/pypi/fakeredis/
+
 .. image:: https://coveralls.io/repos/jamesls/fakeredis/badge.png?branch=master
    :target: https://coveralls.io/r/jamesls/fakeredis
 
@@ -21,7 +30,9 @@ How to Use
 
 The intent is for fakeredis to act as though you're talking to a real
 redis server.  It does this by storing state in the fakeredis module.
-For example::
+For example:
+
+.. code-block:: python
 
   >>> import fakeredis
   >>> r = fakeredis.FakeStrictRedis()
@@ -37,7 +48,9 @@ For example::
   [2, 1]
 
 By storing state in the fakeredis module, instances can share
-data::
+data:
+
+.. code-block:: python
 
   >>> import fakeredis
   >>> r1 = fakeredis.FakeStrictRedis()
@@ -66,17 +79,24 @@ All of the redis commands are implemented in fakeredis with
 these exceptions:
 
 
+set
+---
+
+ * sscan
+
+
 hash
 ----
 
- * hincrbyfloat
+ * hscan
 
 
-string
-------
+hyperloglog
+-----------
 
- * incrbyfloat
- * bitop
+ * pfcount
+ * pfadd
+ * pfmerge
 
 
 generic
@@ -93,25 +113,45 @@ generic
 server
 ------
 
- * debug object
  * client list
  * lastsave
  * slowlog
- * sync
+ * debug object
  * shutdown
  * debug segfault
+ * command count
  * monitor
  * client kill
+ * cluster slots
+ * role
  * config resetstat
  * time
  * config get
+ * config set
  * save
- * bgsave
+ * client setname
+ * command getkeys
+ * config rewrite
+ * sync
+ * client getname
  * bgrewriteaof
  * slaveof
  * info
- * config set
+ * client pause
+ * bgsave
+ * command
  * dbsize
+ * command info
+
+
+sorted_set
+----------
+
+ * zrangebylex
+ * zscan
+ * zrevrangebylex
+ * zremrangebylex
+ * zlexcount
 
 
 connection
@@ -134,12 +174,21 @@ scripting
  * script exists
 
 
+string
+------
+
+ * incrbyfloat
+ * bitop
+ * bitpos
+
+
 pubsub
 ------
 
  * punsubscribe
  * subscribe
  * publish
+ * pubsub
  * psubscribe
  * unsubscribe
 
