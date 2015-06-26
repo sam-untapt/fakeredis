@@ -4,11 +4,11 @@ import copy
 from ctypes import CDLL, POINTER, c_double, c_char_p, pointer
 from ctypes.util import find_library
 import fnmatch
-from urlparse import urlparse
 from collections import MutableMapping
 from datetime import datetime, timedelta
 import operator
 import sys
+import re
 
 import redis
 from redis.exceptions import ResponseError
@@ -21,7 +21,6 @@ __version__ = '0.6.1'
 if sys.version_info[0] == 2:
     text_type = unicode
     string_types = (str, unicode)
-    redis_string_types = (str, unicode, bytes)
     byte_to_int = ord
     int_to_byte = chr
 
@@ -48,7 +47,6 @@ if sys.version_info[0] == 2:
 else:
     text_type = str
     string_types = (str,)
-    redis_string_types = (bytes, str)
 
     def byte_to_int(b):
         if isinstance(b, int):
@@ -116,7 +114,7 @@ class _StrKeyDict(MutableMapping):
         self._ex_keys[key] = timestamp
 
     def expiring(self, key):
-        if key not in self._ex_keys:
+        if not key in self._ex_keys:
             return None
         return self._ex_keys[key]
 
@@ -145,21 +143,7 @@ class _StrKeyDict(MutableMapping):
         return copy.deepcopy(self._dict)
 
 
-<<<<<<< HEAD
 class FakeStrictRedis(redis.StrictRedis):
-=======
-class _ZSet(_StrKeyDict):
-    redis_type = b'zset'
-
-
-
-class _Hash(_StrKeyDict):
-    redis_type = b'hash'
-
-
-
-class FakeStrictRedis(redis.StrictRedis):
->>>>>>> upstream/master
     @classmethod
     def from_url(cls, url, db=None, **kwargs):
         url = urlparse(url)
@@ -177,6 +161,11 @@ class FakeStrictRedis(redis.StrictRedis):
         self._db_num = db
         self._encoding = charset
         self._encoding_errors = errors
+        self.connection_pool = db
+        self.response_callback = None
+
+    def get_connection(self, command_name, *keys, **options):
+        return self.connection_pool
 
     def flushdb(self):
         DATABASES[self._db_num].clear()
@@ -232,11 +221,6 @@ class FakeStrictRedis(redis.StrictRedis):
         else:
             return False
 
-    def echo(self, value):
-        if isinstance(value, text_type):
-            return value.encode('utf-8')
-        return value
-
     def get(self, name):
         value = self._db.get(name)
         if isinstance(value, _StrKeyDict):
@@ -282,19 +266,6 @@ class FakeStrictRedis(redis.StrictRedis):
                                       "range.")
         return self._db[name]
 
-    def incrby(self, name, amount=1):
-        """
-        Alias for command ``incr``
-        """
-        return self.incr(name, amount)
-
-    def incrbyfloat(self, name, amount=1.0):
-        try:
-            self._db[name] = float(self._db.get(name, '0')) + amount
-        except (TypeError, ValueError):
-            raise redis.ResponseError("value is not a valid float.")
-        return self._db[name]
-
     def keys(self, pattern=None):
         return [key for key in self._db
                 if not key or not pattern or
@@ -313,8 +284,7 @@ class FakeStrictRedis(redis.StrictRedis):
     def mset(self, *args, **kwargs):
         if args:
             if len(args) != 1 or not isinstance(args[0], dict):
-                raise redis.RedisError(
-                    'MSET requires **kwargs or a single dict arg')
+                raise RedisError('MSET requires **kwargs or a single dict arg')
             kwargs.update(args[0])
         for key, val in iteritems(kwargs):
             self.set(key, val)
@@ -381,13 +351,13 @@ class FakeStrictRedis(redis.StrictRedis):
                 yield item
 
     def set(self, name, value, ex=None, px=None, nx=False, xx=False):
-        if (not nx and not xx) or (nx and self._db.get(name, None) is None) \
-                or (xx and not self._db.get(name, None) is None):
+        if (not nx and not xx) \
+        or (nx and self._db.get(name, None) is None) \
+        or (xx and not self._db.get(name, None) is None):
             if ex is not None and ex > 0:
                 self._db.expire(name, datetime.now() + timedelta(seconds=ex))
             elif px is not None and px > 0:
-                self._db.expire(name, datetime.now() +
-                                timedelta(milliseconds=px))
+                self._db.expire(name, datetime.now() + timedelta(milliseconds=px))
             self._db[name] = to_bytes(value)
             return True
         else:
@@ -477,15 +447,7 @@ class FakeStrictRedis(redis.StrictRedis):
                           + (exp_time - now).microseconds / 1E6) * multiplier)
 
     def type(self, name):
-        key = self._db.get(name)
-        if hasattr(key.__class__, 'redis_type'):
-            return key.redis_type
-        if isinstance(key, redis_string_types):
-            return b'string'
-        elif isinstance(key, list):
-            return b'list'
-        elif isinstance(key, set):
-            return b'set'
+        pass
 
     def watch(self, *names):
         pass
@@ -594,7 +556,6 @@ class FakeStrictRedis(redis.StrictRedis):
 
     def _sort_using_by_arg(self, data, by):
         by = to_bytes(by)
-
         def _by_key(arg):
             key = by.replace(b'*', arg)
             if b'->' in by:
@@ -602,7 +563,6 @@ class FakeStrictRedis(redis.StrictRedis):
                 return self._db.get(key, {}).get(hash_key)
             else:
                 return self._db.get(key)
-
         data.sort(key=_by_key)
 
     def lpush(self, name, *values):
@@ -766,18 +726,18 @@ class FakeStrictRedis(redis.StrictRedis):
 
     def hincrby(self, name, key, amount=1):
         "Increment the value of ``key`` in hash ``name`` by ``amount``"
-        new = int(self._db.setdefault(name, _Hash()).get(key, '0')) + amount
+        new = int(self._db.setdefault(name, _StrKeyDict()).get(key, '0')) + amount
         self._db[name][key] = new
         return new
 
     def hincrbyfloat(self, name, key, amount=1.0):
-        """Increment the value of key in hash name by floating amount"""
+        "Increment the value of ``key`` in hash ``name`` by floating ``amount``"
         try:
             amount = float(amount)
         except ValueError:
             raise redis.ResponseError("value is not a valid float")
         try:
-            current = float(self._db.setdefault(name, _Hash()).get(key, '0'))
+            current = float(self._db.setdefault(name, _StrKeyDict()).get(key, '0'))
         except ValueError:
             raise redis.ResponseError("hash value is not a valid float")
         new = current + amount
@@ -798,7 +758,7 @@ class FakeStrictRedis(redis.StrictRedis):
         Returns 1 if HSET created a new field, otherwise 0
         """
         key_is_new = key not in self._db.get(name, {})
-        self._db.setdefault(name, _Hash())[key] = to_bytes(value)
+        self._db.setdefault(name, _StrKeyDict())[key] = to_bytes(value)
         return 1 if key_is_new else 0
 
     def hsetnx(self, name, key, value):
@@ -808,7 +768,7 @@ class FakeStrictRedis(redis.StrictRedis):
         """
         if key in self._db.get(name, {}):
             return False
-        self._db.setdefault(name, _Hash())[key] = to_bytes(value)
+        self._db.setdefault(name, _StrKeyDict())[key] = to_bytes(value)
         return True
 
     def hmset(self, name, mapping):
@@ -820,8 +780,8 @@ class FakeStrictRedis(redis.StrictRedis):
             raise redis.DataError("'hmset' with 'mapping' of length 0")
         new_mapping = {}
         for k, v in mapping.items():
-            new_mapping[k] = to_bytes(v)
-        self._db.setdefault(name, _Hash()).update(new_mapping)
+          new_mapping[k] = to_bytes(v)
+        self._db.setdefault(name, _StrKeyDict()).update(new_mapping)
         return True
 
     def hmget(self, name, keys, *args):
@@ -982,7 +942,7 @@ class FakeStrictRedis(redis.StrictRedis):
         if len(args) % 2 != 0:
             raise redis.RedisError("ZADD requires an equal number of "
                                    "values and scores")
-        zset = self._db.setdefault(name, _ZSet())
+        zset = self._db.setdefault(name, _StrKeyDict())
         added = 0
         for score, value in zip(*[args[i::2] for i in range(2)]):
             if value not in zset:
@@ -1014,7 +974,7 @@ class FakeStrictRedis(redis.StrictRedis):
 
     def zincrby(self, name, value, amount=1):
         "Increment the score of ``value`` in sorted set ``name`` by ``amount``"
-        d = self._db.setdefault(name, _ZSet())
+        d = self._db.setdefault(name, _StrKeyDict())
         score = d.get(value, 0) + amount
         d[value] = score
         return score
@@ -1038,7 +998,7 @@ class FakeStrictRedis(redis.StrictRedis):
                                 lambda x: x in
                                 valid_keys)
 
-    def zrange(self, name, start, end, desc=False, withscores=False, score_cast_func=float):
+    def zrange(self, name, start, end, desc=False, withscores=False):
         """
         Return a range of values from sorted set ``name`` between
         ``start`` and ``end`` sorted in ascending order.
@@ -1064,16 +1024,15 @@ class FakeStrictRedis(redis.StrictRedis):
         if not withscores:
             return items
         else:
-            return [(k, score_cast_func(all_items[k])) for k in items]
+            return [(k, all_items[k]) for k in items]
 
     def _get_zelements_in_order(self, all_items, reverse=False):
-        by_keyname = sorted(
-            all_items.items(), key=lambda x: x[0], reverse=reverse)
+        by_keyname = sorted(all_items.items(), key=lambda x: x[0], reverse=reverse)
         in_order = sorted(by_keyname, key=lambda x: x[1], reverse=reverse)
         return [el[0] for el in in_order]
 
     def zrangebyscore(self, name, min, max,
-                      start=None, num=None, withscores=False, score_cast_func=float):
+                      start=None, num=None, withscores=False):
         """
         Return a range of values from the sorted set ``name`` with scores
         between ``min`` and ``max``.
@@ -1085,9 +1044,9 @@ class FakeStrictRedis(redis.StrictRedis):
         The return type is a list of (value, score) pairs
         """
         return self._zrangebyscore(name, min, max, start, num, withscores,
-                                   reverse=False, score_cast_func=score_cast_func)
+                                   reverse=False)
 
-    def _zrangebyscore(self, name, min, max, start, num, withscores, reverse, score_cast_func=float):
+    def _zrangebyscore(self, name, min, max, start, num, withscores, reverse):
         if (start is not None and num is None) or \
                 (num is not None and start is None):
             raise redis.RedisError("``start`` and ``num`` must both "
@@ -1102,7 +1061,7 @@ class FakeStrictRedis(redis.StrictRedis):
         if start is not None:
             matches = matches[start:start + num]
         if withscores:
-            return [(k, score_cast_func(all_items[k])) for k in matches]
+            return [(k, all_items[k]) for k in matches]
         return matches
 
     def zrank(self, name, value):
@@ -1160,7 +1119,8 @@ class FakeStrictRedis(redis.StrictRedis):
                 removed += 1
         return removed
 
-    def zrevrange(self, name, start, num, withscores=False, score_cast_func=float):
+
+    def zrevrange(self, name, start, num, withscores=False):
         """
         Return a range of values from sorted set ``name`` between
         ``start`` and ``num`` sorted in descending order.
@@ -1170,10 +1130,10 @@ class FakeStrictRedis(redis.StrictRedis):
         ``withscores`` indicates to return the scores along with the values
         The return type is a list of (value, score) pairs
         """
-        return self.zrange(name, start, num, True, withscores, score_cast_func)
+        return self.zrange(name, start, num, True, withscores)
 
     def zrevrangebyscore(self, name, max, min,
-                         start=None, num=None, withscores=False, score_cast_func=float):
+                         start=None, num=None, withscores=False):
         """
         Return a range of values from the sorted set ``name`` with scores
         between ``min`` and ``max`` in descending order.
@@ -1185,7 +1145,7 @@ class FakeStrictRedis(redis.StrictRedis):
         The return type is a list of (value, score) pairs
         """
         return self._zrangebyscore(name, min, max, start, num, withscores,
-                                   reverse=True, score_cast_func=score_cast_func)
+                                   reverse=True)
 
     def zrevrank(self, name, value):
         """
@@ -1216,7 +1176,7 @@ class FakeStrictRedis(redis.StrictRedis):
         self._zaggregate(dest, keys, aggregate, lambda x: True)
 
     def _zaggregate(self, dest, keys, aggregate, should_include):
-        new_zset = _ZSet()
+        new_zset = _StrKeyDict()
         if aggregate is None:
             aggregate = 'SUM'
         # This is what the actual redis client uses, so we'll use
@@ -1280,7 +1240,7 @@ class FakeStrictRedis(redis.StrictRedis):
         raise redis.WatchError('Could not run transaction after 5 tries')
 
 
-class FakeRedis(FakeStrictRedis, redis.Redis):
+class FakeRedis(FakeStrictRedis, redis.StrictRedis):
     def setex(self, name, value, time):
         return super(FakeRedis, self).setex(name, time, value)
 
@@ -1304,7 +1264,7 @@ class FakeRedis(FakeStrictRedis, redis.Redis):
         else:
             value = list(pairs)[0]
             score = list(pairs.values())[0]
-        self._db.setdefault(name, _ZSet())[value] = score
+        self._db.setdefault(name, _StrKeyDict())[value] = score
 
 
 class FakePipeline(object):
